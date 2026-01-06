@@ -5,41 +5,51 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+function normalizeGoogleApiKey(raw: string | undefined) {
+  if (!raw) return "";
+  // Users sometimes paste "GOOGLE_AI_API_KEY=AIza..." or wrap the key in quotes.
+  return raw
+    .trim()
+    .replace(/^GOOGLE_AI_API_KEY\s*=\s*/i, "")
+    .replace(/^['"]/, "")
+    .replace(/['"]$/, "")
+    .trim();
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { messages } = await req.json();
-    const GOOGLE_AI_API_KEY = Deno.env.get("GOOGLE_AI_API_KEY");
-    
-    if (!GOOGLE_AI_API_KEY) {
-      throw new Error("GOOGLE_AI_API_KEY is not configured");
-    }
+    const body = await req.json().catch(() => ({}));
+    const messages = Array.isArray(body?.messages) ? body.messages : [];
 
-    console.log("Sending request to Google Gemini AI...");
+    const apiKey = normalizeGoogleApiKey(Deno.env.get("GOOGLE_AI_API_KEY"));
+    if (!apiKey) throw new Error("GOOGLE_AI_API_KEY is not configured");
 
-    const systemPrompt = "You are StudyBuddy AI, a helpful engineering tutor. You help students with their doubts in physics, mathematics, chemistry, and engineering subjects. Provide clear, step-by-step explanations with formulas when needed. Keep your responses concise but thorough.";
-    
-    // Convert messages to Gemini format
+    console.log("Sending request to Google Gemini AI...", { keyLength: apiKey.length });
+
+    const systemPrompt =
+      "You are StudyBuddy AI, a helpful engineering tutor. You help students with their doubts in physics, mathematics, chemistry, and engineering subjects. Provide clear, step-by-step explanations with formulas when needed. Keep your responses concise but thorough.";
+
     const contents = messages.map((msg: { role: string; content: string }) => ({
       role: msg.role === "assistant" ? "model" : "user",
-      parts: [{ text: msg.content }]
+      parts: [{ text: String(msg.content ?? "") }],
     }));
 
-    // Add system instruction to first user message
     if (contents.length > 0 && contents[0].role === "user") {
       contents[0].parts[0].text = `${systemPrompt}\n\nUser question: ${contents[0].parts[0].text}`;
+    } else if (contents.length === 0) {
+      // Ensure Gemini always gets at least one user message
+      contents.push({ role: "user", parts: [{ text: systemPrompt }] });
     }
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:streamGenerateContent?alt=sse&key=${GOOGLE_AI_API_KEY}`,
+    const upstream = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:streamGenerateContent?alt=sse&key=${apiKey}`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents,
           generationConfig: {
@@ -47,28 +57,43 @@ serve(async (req) => {
             maxOutputTokens: 2048,
           },
         }),
-      }
+      },
     );
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Google AI error:", response.status, errorText);
-      
-      if (response.status === 429) {
+    if (!upstream.ok) {
+      const errorText = await upstream.text();
+      console.error("Google AI error:", upstream.status, errorText);
+
+      if (upstream.status === 429) {
         return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again later." }), {
           status: 429,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      
+
+      // Convert Google's "API_KEY_INVALID" to a clearer client error
+      if (errorText.includes("API_KEY_INVALID") || errorText.includes("API key not valid")) {
+        return new Response(
+          JSON.stringify({
+            error:
+              "Google API key is invalid. Paste ONLY the key value (starts with 'AIza'), not 'GOOGLE_AI_API_KEY=...'.",
+            details: errorText,
+          }),
+          {
+            status: 401,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
+        );
+      }
+
       return new Response(JSON.stringify({ error: "AI service error", details: errorText }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Transform Google's SSE format to OpenAI-compatible format
-    const reader = response.body?.getReader();
+    // Transform Google's SSE format to OpenAI-compatible format expected by the frontend
+    const reader = upstream.body?.getReader();
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
 
@@ -80,39 +105,36 @@ serve(async (req) => {
         }
 
         let buffer = "";
-        
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          
+
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() || "";
-          
+
           for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              const jsonStr = line.slice(6).trim();
-              if (jsonStr === "[DONE]") continue;
-              
-              try {
-                const parsed = JSON.parse(jsonStr);
-                const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (text) {
-                  const openAIFormat = JSON.stringify({
-                    choices: [{ delta: { content: text } }]
-                  });
-                  controller.enqueue(encoder.encode(`data: ${openAIFormat}\n\n`));
-                }
-              } catch {
-                // Skip malformed JSON
+            if (!line.startsWith("data: ")) continue;
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr || jsonStr === "[DONE]") continue;
+
+            try {
+              const parsed = JSON.parse(jsonStr);
+              const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (text) {
+                const openAIFormat = JSON.stringify({ choices: [{ delta: { content: text } }] });
+                controller.enqueue(encoder.encode(`data: ${openAIFormat}\n\n`));
               }
+            } catch {
+              // Skip malformed JSON
             }
           }
         }
-        
+
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
-      }
+      },
     });
 
     return new Response(stream, {
