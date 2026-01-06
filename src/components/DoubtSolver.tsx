@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Send, Sparkles, User, Loader2 } from "lucide-react";
+import { Send, Sparkles, User, Loader2, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
@@ -13,8 +13,48 @@ const DoubtSolver = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+
+  const testConnection = async () => {
+    setIsTesting(true);
+    try {
+      const resp = await fetch(CHAT_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+        },
+        body: JSON.stringify({ messages: [{ role: "user", content: "test" }] }),
+      });
+
+      const data = await resp.json().catch(() => null);
+
+      if (resp.ok) {
+        toast({
+          title: "Connection Successful",
+          description: "API key is valid and backend is responding.",
+        });
+      } else {
+        const keyLength = data?.keyLength ?? "unknown";
+        const errorMsg = data?.error ?? `Status ${resp.status}`;
+        toast({
+          title: "Connection Failed",
+          description: `${errorMsg} (keyLength: ${keyLength})`,
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Connection Error",
+        description: "Could not reach the backend. Check your network.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsTesting(false);
+    }
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -142,12 +182,24 @@ const DoubtSolver = () => {
         >
           <Card className="overflow-hidden border-2 border-border/50 shadow-xl">
             {/* Chat header */}
-            <div className="px-6 py-4 border-b border-border bg-card flex items-center gap-3">
-              <div className={`w-3 h-3 rounded-full ${isLoading ? "bg-yellow-500 animate-pulse" : "bg-accent"}`} />
-              <span className="font-medium text-sm">StudyBuddy AI</span>
-              <span className="text-xs text-muted-foreground">
-                {isLoading ? "• Thinking..." : "• Powered by Gemini"}
-              </span>
+            <div className="px-6 py-4 border-b border-border bg-card flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className={`w-3 h-3 rounded-full ${isLoading ? "bg-yellow-500 animate-pulse" : "bg-accent"}`} />
+                <span className="font-medium text-sm">StudyBuddy AI</span>
+                <span className="text-xs text-muted-foreground">
+                  {isLoading ? "• Thinking..." : "• Powered by Gemini"}
+                </span>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={testConnection}
+                disabled={isTesting}
+                className="text-xs"
+              >
+                {isTesting ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Wifi className="w-3 h-3 mr-1" />}
+                Test Connection
+              </Button>
             </div>
 
             {/* Messages */}
