@@ -16,6 +16,11 @@ function normalizeGoogleApiKey(raw: string | undefined) {
     .trim();
 }
 
+function isLikelyGoogleApiKey(key: string) {
+  // Google AI Studio keys are typically ~39 chars and start with AIza
+  return key.startsWith("AIza") && key.length >= 30;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -27,6 +32,21 @@ serve(async (req) => {
 
     const apiKey = normalizeGoogleApiKey(Deno.env.get("GOOGLE_AI_API_KEY"));
     if (!apiKey) throw new Error("GOOGLE_AI_API_KEY is not configured");
+
+    // Fail fast with a clear error if the stored key is obviously wrong/truncated.
+    if (!isLikelyGoogleApiKey(apiKey)) {
+      return new Response(
+        JSON.stringify({
+          error:
+            "Google API key looks invalid or truncated. Paste the FULL key value from Google AI Studio (starts with 'AIza' and is ~39 chars).",
+          keyLength: apiKey.length,
+        }),
+        {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
 
     console.log("Sending request to Google Gemini AI...", { keyLength: apiKey.length });
 
@@ -41,7 +61,6 @@ serve(async (req) => {
     if (contents.length > 0 && contents[0].role === "user") {
       contents[0].parts[0].text = `${systemPrompt}\n\nUser question: ${contents[0].parts[0].text}`;
     } else if (contents.length === 0) {
-      // Ensure Gemini always gets at least one user message
       contents.push({ role: "user", parts: [{ text: systemPrompt }] });
     }
 
@@ -71,13 +90,13 @@ serve(async (req) => {
         });
       }
 
-      // Convert Google's "API_KEY_INVALID" to a clearer client error
       if (errorText.includes("API_KEY_INVALID") || errorText.includes("API key not valid")) {
         return new Response(
           JSON.stringify({
             error:
-              "Google API key is invalid. Paste ONLY the key value (starts with 'AIza'), not 'GOOGLE_AI_API_KEY=...'.",
+              "Google API rejected the key. Create a NEW key in Google AI Studio and paste ONLY the full AIza... value (no quotes / no GOOGLE_AI_API_KEY=).",
             details: errorText,
+            keyLength: apiKey.length,
           }),
           {
             status: 401,
@@ -92,7 +111,6 @@ serve(async (req) => {
       });
     }
 
-    // Transform Google's SSE format to OpenAI-compatible format expected by the frontend
     const reader = upstream.body?.getReader();
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
