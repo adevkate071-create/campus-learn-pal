@@ -58,13 +58,11 @@ const Hero = () => {
             <Button variant="hero" size="xl">
               Start Learning Free
             </Button>
-            <Button 
-              variant="hero-secondary" 
-              size="xl"
-              onClick={() => window.open("https://youtu.be/sKaRPkJbR_g", "_blank")}
-            >
-              <Play className="w-5 h-5" />
-              Watch Demo
+            <Button variant="hero-secondary" size="xl" asChild>
+              <a href="https://youtu.be/sKaRPkJbR_g" target="_blank" rel="noopener noreferrer">
+                <Play className="w-5 h-5" />
+                Watch Demo
+              </a>
             </Button>
           </motion.div>
 
