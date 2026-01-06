@@ -12,46 +12,51 @@ serve(async (req) => {
 
   try {
     const { messages } = await req.json();
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    const GOOGLE_AI_API_KEY = Deno.env.get("GOOGLE_AI_API_KEY");
     
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    if (!GOOGLE_AI_API_KEY) {
+      throw new Error("GOOGLE_AI_API_KEY is not configured");
     }
 
-    console.log("Sending request to Gemini via Lovable AI Gateway...");
+    console.log("Sending request to Google Generative AI...");
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash-lite",
-        messages: [
-          {
-            role: "system",
-            content: "You are StudyBuddy AI, a helpful engineering tutor. You help students with their doubts in physics, mathematics, chemistry, and engineering subjects. Provide clear, step-by-step explanations with formulas when needed. Keep your responses concise but thorough."
+    // Build the conversation content for Gemini
+    const systemPrompt = "You are StudyBuddy AI, a helpful engineering tutor. You help students with their doubts in physics, mathematics, chemistry, and engineering subjects. Provide clear, step-by-step explanations with formulas when needed. Keep your responses concise but thorough.";
+    
+    const contents = messages.map((msg: { role: string; content: string }) => ({
+      role: msg.role === "assistant" ? "model" : "user",
+      parts: [{ text: msg.content }]
+    }));
+
+    // Add system instruction as first user message if needed
+    if (contents.length > 0 && contents[0].role === "user") {
+      contents[0].parts[0].text = `${systemPrompt}\n\nUser question: ${contents[0].parts[0].text}`;
+    }
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:streamGenerateContent?alt=sse&key=${GOOGLE_AI_API_KEY}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents,
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 2048,
           },
-          ...messages,
-        ],
-        stream: true,
-      }),
-    });
+        }),
+      }
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("AI gateway error:", response.status, errorText);
+      console.error("Google AI error:", response.status, errorText);
       
       if (response.status === 429) {
         return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again later." }), {
           status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      if (response.status === 402) {
-        return new Response(JSON.stringify({ error: "Payment required. Please add credits to continue." }), {
-          status: 402,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
@@ -62,7 +67,55 @@ serve(async (req) => {
       });
     }
 
-    return new Response(response.body, {
+    // Transform Google's SSE format to OpenAI-compatible format
+    const reader = response.body?.getReader();
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        if (!reader) {
+          controller.close();
+          return;
+        }
+
+        let buffer = "";
+        
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              const jsonStr = line.slice(6).trim();
+              if (jsonStr === "[DONE]") continue;
+              
+              try {
+                const parsed = JSON.parse(jsonStr);
+                const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (text) {
+                  const openAIFormat = JSON.stringify({
+                    choices: [{ delta: { content: text } }]
+                  });
+                  controller.enqueue(encoder.encode(`data: ${openAIFormat}\n\n`));
+                }
+              } catch {
+                // Skip malformed JSON
+              }
+            }
+          }
+        }
+        
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      }
+    });
+
+    return new Response(stream, {
       headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
     });
   } catch (error) {
