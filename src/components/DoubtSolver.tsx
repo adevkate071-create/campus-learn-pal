@@ -144,9 +144,9 @@ const DoubtSolver = () => {
             {/* Chat header */}
             <div className="px-6 py-4 border-b border-border bg-card flex items-center gap-3">
               <div className={`w-3 h-3 rounded-full ${isLoading ? "bg-yellow-500 animate-pulse" : "bg-accent"}`} />
-              <span className="font-medium text-sm">StudyBuddy AI</span>
+              <span className="font-medium text-sm">JokeBuddy</span>
               <span className="text-xs text-muted-foreground">
-                {isLoading ? "• Thinking..." : "• Powered by DeepSeek R1"}
+                {isLoading ? "• Fetching joke..." : "• Powered by Joke API"}
               </span>
             </div>
 
@@ -154,8 +154,7 @@ const DoubtSolver = () => {
             <div className="p-6 space-y-4 bg-muted/20 min-h-[300px] max-h-[400px] overflow-y-auto">
               {messages.length === 0 && (
                 <div className="text-center text-muted-foreground py-12">
-                  <Sparkles className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                  <p>Ask any engineering question to get started!</p>
+                  <p>Send any message to get a random joke!</p>
                 </div>
               )}
               {messages.map((message, index) => (

@@ -13,53 +13,48 @@ serve(async (req) => {
 
   try {
     const { messages } = await req.json();
-    const SAMBANOVA_API_KEY = Deno.env.get("SAMBANOVA_API_KEY");
+    const userMessage = messages?.[messages.length - 1]?.content || "";
     
-    if (!SAMBANOVA_API_KEY) {
-      throw new Error("SAMBANOVA_API_KEY is not configured");
-    }
+    console.log("User message:", userMessage);
+    console.log("Fetching joke from Official Joke API...");
 
-    console.log("Sending request to SambaNova API...");
-
-    const response = await fetch("https://api.sambanova.ai/v1/chat/completions", {
-      method: "POST",
+    const response = await fetch("https://official-joke-api.appspot.com/random_joke", {
+      method: "GET",
       headers: {
-        "Authorization": `Bearer ${SAMBANOVA_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        stream: true,
-        model: "DeepSeek-R1-0528",
-        messages: [
-          {
-            role: "system",
-            content: "You are StudyBuddy AI, a helpful engineering tutor. You help students with their doubts in physics, mathematics, chemistry, and engineering subjects. Provide clear, step-by-step explanations with formulas when needed. Keep your responses concise but thorough."
-          },
-          ...messages,
-        ],
-      }),
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error("SambaNova API error:", response.status, errorText);
-      
-      if (response.status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again later." }), {
-          status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      
-      return new Response(JSON.stringify({ error: "AI service error" }), {
+      console.error("Joke API error:", response.status);
+      return new Response(JSON.stringify({ error: "Joke API error" }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    console.log("Streaming response from SambaNova API...");
+    const jokeData = await response.json();
+    console.log("Joke data:", jokeData);
 
-    return new Response(response.body, {
+    // Format the joke as a response
+    const jokeResponse = `😂 ${jokeData.setup}\n\n👉 ${jokeData.punchline}`;
+
+    // Return as SSE format to maintain compatibility with existing frontend
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        const data = JSON.stringify({
+          choices: [{
+            delta: { content: jokeResponse }
+          }]
+        });
+        controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+        controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
+        controller.close();
+      }
+    });
+
+    return new Response(stream, {
       headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
     });
   } catch (error) {
