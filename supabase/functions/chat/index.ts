@@ -28,6 +28,7 @@ serve(async (req) => {
 
   try {
     const body = await req.json().catch(() => ({}));
+    const mode = body?.mode as string | undefined;
     const messages = Array.isArray(body?.messages) ? body.messages : [];
 
     const apiKey = normalizeGoogleApiKey(Deno.env.get("GOOGLE_AI_API_KEY"));
@@ -45,6 +46,49 @@ serve(async (req) => {
           status: 401,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         },
+      );
+    }
+
+    // Non-streaming health check used by the "Test Connection" button.
+    if (mode === "health") {
+      console.log("Running Gemini health check...", { keyLength: apiKey.length });
+
+      const ping = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: "ping" }] }],
+            generationConfig: { maxOutputTokens: 4 },
+          }),
+        },
+      );
+
+      if (!ping.ok) {
+        const errorText = await ping.text();
+        const isKeyInvalid =
+          errorText.includes("API_KEY_INVALID") || errorText.includes("API key not valid");
+
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: isKeyInvalid
+              ? "Google API key is invalid (rejected by Google). Create a new key in Google AI Studio and paste the full AIza... value."
+              : "Health check failed.",
+            details: errorText,
+            keyLength: apiKey.length,
+          }),
+          {
+            status: isKeyInvalid ? 401 : 500,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ ok: true, status: "ok", keyLength: apiKey.length, model: "gemini-2.5-flash-lite" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 

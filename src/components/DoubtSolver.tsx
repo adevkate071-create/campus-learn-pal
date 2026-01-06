@@ -26,7 +26,7 @@ const DoubtSolver = () => {
           "Content-Type": "application/json",
           Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
         },
-        body: JSON.stringify({ messages: [{ role: "user", content: "test" }] }),
+        body: JSON.stringify({ mode: "health" }),
       });
 
       const data = await resp.json().catch(() => null);
@@ -34,7 +34,7 @@ const DoubtSolver = () => {
       if (resp.ok) {
         toast({
           title: "Connection Successful",
-          description: "API key is valid and backend is responding.",
+          description: `Backend OK • keyLength: ${data?.keyLength ?? "unknown"}`,
         });
       } else {
         const keyLength = data?.keyLength ?? "unknown";
@@ -45,7 +45,7 @@ const DoubtSolver = () => {
           variant: "destructive",
         });
       }
-    } catch (error) {
+    } catch {
       toast({
         title: "Connection Error",
         description: "Could not reach the backend. Check your network.",
@@ -84,8 +84,21 @@ const DoubtSolver = () => {
         body: JSON.stringify({ messages: [...messages, userMsg] }),
       });
 
-      if (!resp.ok || !resp.body) {
-        throw new Error("Failed to get response");
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => null);
+        const errorMsg = data?.error ?? "Failed to get response";
+        const keyLength = data?.keyLength;
+
+        toast({
+          title: "Chat Error",
+          description: keyLength ? `${errorMsg} (keyLength: ${keyLength})` : errorMsg,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      if (!resp.body) {
+        throw new Error("Missing response stream");
       }
 
       const reader = resp.body.getReader();
