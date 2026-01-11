@@ -5,22 +5,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-function normalizeGoogleApiKey(raw: string | undefined) {
-  if (!raw) return "";
-  // Users sometimes paste "GOOGLE_AI_API_KEY=AIza..." or wrap the key in quotes.
-  return raw
-    .trim()
-    .replace(/^GOOGLE_AI_API_KEY\s*=\s*/i, "")
-    .replace(/^['"]/, "")
-    .replace(/['"]$/, "")
-    .trim();
-}
-
-function isLikelyGoogleApiKey(key: string) {
-  // Google AI Studio keys are typically ~39 chars and start with AIza
-  return key.startsWith("AIza") && key.length >= 30;
-}
-
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -31,182 +15,116 @@ serve(async (req) => {
     const mode = body?.mode as string | undefined;
     const messages = Array.isArray(body?.messages) ? body.messages : [];
 
-    const apiKey = normalizeGoogleApiKey(Deno.env.get("GOOGLE_AI_API_KEY"));
-    if (!apiKey) throw new Error("GOOGLE_AI_API_KEY is not configured");
-
-    // Fail fast with a clear error if the stored key is obviously wrong/truncated.
-    if (!isLikelyGoogleApiKey(apiKey)) {
-      return new Response(
-        JSON.stringify({
-          error:
-            "Google API key looks invalid or truncated. Paste the FULL key value from Google AI Studio (starts with 'AIza' and is ~39 chars).",
-          keyLength: apiKey.length,
-        }),
-        {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        },
-      );
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    if (!LOVABLE_API_KEY) {
+      throw new Error("LOVABLE_API_KEY is not configured");
     }
 
-    // Non-streaming health check used by the "Test Connection" button.
+    // Health check for "Test Connection" button
     if (mode === "health") {
-      console.log("Running Gemini health check...", { keyLength: apiKey.length });
+      console.log("Running Lovable AI Gateway health check...");
 
-      const ping = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: "ping" }] }],
-            generationConfig: { maxOutputTokens: 4 },
-          }),
+      const ping = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${LOVABLE_API_KEY}`,
+          "Content-Type": "application/json",
         },
-      );
+        body: JSON.stringify({
+          model: "google/gemini-3-flash-preview",
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 5,
+        }),
+      });
 
       if (!ping.ok) {
         const errorText = await ping.text();
-        const isKeyInvalid =
-          errorText.includes("API_KEY_INVALID") || errorText.includes("API key not valid");
-
+        console.error("Health check failed:", ping.status, errorText);
         return new Response(
           JSON.stringify({
             ok: false,
-            error: isKeyInvalid
-              ? "Google API key is invalid (rejected by Google). Create a new key in Google AI Studio and paste the full AIza... value."
-              : "Health check failed.",
+            error: "Lovable AI Gateway health check failed.",
             details: errorText,
-            keyLength: apiKey.length,
           }),
           {
-            status: isKeyInvalid ? 401 : 500,
+            status: ping.status,
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           },
         );
       }
 
       return new Response(
-        JSON.stringify({ ok: true, status: "ok", keyLength: apiKey.length, model: "gemini-2.5-flash-lite" }),
+        JSON.stringify({ ok: true, status: "ok", model: "google/gemini-3-flash-preview" }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    console.log("Sending request to Google Gemini AI...", { keyLength: apiKey.length });
+    console.log("Sending request to Lovable AI Gateway...");
 
     const systemPrompt =
       "You are StudyBuddy AI, a helpful engineering tutor. You help students with their doubts in physics, mathematics, chemistry, and engineering subjects. Provide clear, step-by-step explanations with formulas when needed. Keep your responses concise but thorough.";
 
-    const contents = messages.map((msg: { role: string; content: string }) => ({
-      role: msg.role === "assistant" ? "model" : "user",
-      parts: [{ text: String(msg.content ?? "") }],
-    }));
-
-    if (contents.length > 0 && contents[0].role === "user") {
-      contents[0].parts[0].text = `${systemPrompt}\n\nUser question: ${contents[0].parts[0].text}`;
-    } else if (contents.length === 0) {
-      contents.push({ role: "user", parts: [{ text: systemPrompt }] });
-    }
-
-    const upstream = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:streamGenerateContent?alt=sse&key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents,
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 2048,
-          },
-        }),
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
       },
-    );
+      body: JSON.stringify({
+        model: "google/gemini-3-flash-preview",
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...messages,
+        ],
+        stream: true,
+      }),
+    });
 
-    if (!upstream.ok) {
-      const errorText = await upstream.text();
-      console.error("Google AI error:", upstream.status, errorText);
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Lovable AI Gateway error:", response.status, errorText);
 
-      if (upstream.status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again later." }), {
-          status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
-      if (errorText.includes("API_KEY_INVALID") || errorText.includes("API key not valid")) {
+      if (response.status === 429) {
         return new Response(
-          JSON.stringify({
-            error:
-              "Google API rejected the key. Create a NEW key in Google AI Studio and paste ONLY the full AIza... value (no quotes / no GOOGLE_AI_API_KEY=).",
-            details: errorText,
-            keyLength: apiKey.length,
-          }),
+          JSON.stringify({ error: "Rate limits exceeded, please try again later." }),
           {
-            status: 401,
+            status: 429,
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           },
         );
       }
 
-      return new Response(JSON.stringify({ error: "AI service error", details: errorText }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      if (response.status === 402) {
+        return new Response(
+          JSON.stringify({ error: "Payment required, please add funds to your Lovable AI workspace." }),
+          {
+            status: 402,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ error: "AI service error", details: errorText }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
     }
 
-    const reader = upstream.body?.getReader();
-    const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
-
-    const stream = new ReadableStream({
-      async start(controller) {
-        if (!reader) {
-          controller.close();
-          return;
-        }
-
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const jsonStr = line.slice(6).trim();
-            if (!jsonStr || jsonStr === "[DONE]") continue;
-
-            try {
-              const parsed = JSON.parse(jsonStr);
-              const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (text) {
-                const openAIFormat = JSON.stringify({ choices: [{ delta: { content: text } }] });
-                controller.enqueue(encoder.encode(`data: ${openAIFormat}\n\n`));
-              }
-            } catch {
-              // Skip malformed JSON
-            }
-          }
-        }
-
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
-      },
-    });
-
-    return new Response(stream, {
+    // Stream the response directly
+    return new Response(response.body, {
       headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
     });
   } catch (error) {
     console.error("Chat function error:", error);
-    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
   }
 });

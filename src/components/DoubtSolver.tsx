@@ -34,14 +34,13 @@ const DoubtSolver = () => {
       if (resp.ok) {
         toast({
           title: "Connection Successful",
-          description: `Backend OK • keyLength: ${data?.keyLength ?? "unknown"}`,
+          description: `Backend OK • Model: ${data?.model ?? "unknown"}`,
         });
       } else {
-        const keyLength = data?.keyLength ?? "unknown";
         const errorMsg = data?.error ?? `Status ${resp.status}`;
         toast({
           title: "Connection Failed",
-          description: `${errorMsg} (keyLength: ${keyLength})`,
+          description: errorMsg,
           variant: "destructive",
         });
       }
@@ -87,11 +86,10 @@ const DoubtSolver = () => {
       if (!resp.ok) {
         const data = await resp.json().catch(() => null);
         const errorMsg = data?.error ?? "Failed to get response";
-        const keyLength = data?.keyLength;
 
         toast({
           title: "Chat Error",
-          description: keyLength ? `${errorMsg} (keyLength: ${keyLength})` : errorMsg,
+          description: errorMsg,
           variant: "destructive",
         });
         return;
@@ -200,7 +198,7 @@ const DoubtSolver = () => {
                 <div className={`w-3 h-3 rounded-full ${isLoading ? "bg-yellow-500 animate-pulse" : "bg-accent"}`} />
                 <span className="font-medium text-sm">StudyBuddy AI</span>
                 <span className="text-xs text-muted-foreground">
-                  {isLoading ? "• Thinking..." : "• Powered by Gemini"}
+                  {isLoading ? "• Thinking..." : "• Powered by Lovable AI"}
                 </span>
               </div>
               <Button
